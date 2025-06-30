@@ -8,6 +8,9 @@ import pytesseract
 import sys
 from pathlib import Path
 
+# Define the Tesseract data directory path
+TESSDATA_PATH = '/usr/share/tesseract-ocr/5/tessdata'
+
 # Set Tesseract command path for Docker environment
 if os.path.exists('/usr/bin/tesseract'):
     pytesseract.pytesseract.tesseract_cmd = '/usr/bin/tesseract'
@@ -15,6 +18,7 @@ if os.path.exists('/usr/bin/tesseract'):
 # Log Tesseract configuration for debugging
 print(f"Tesseract command: {pytesseract.pytesseract.tesseract_cmd}")
 print(f"TESSDATA_PREFIX: {os.environ.get('TESSDATA_PREFIX', 'Not set')}")
+print(f"Explicit TESSDATA_PATH: {TESSDATA_PATH}")
 
 # Verify Tesseract works at startup
 try:
@@ -83,24 +87,39 @@ def predict_document_type():
         
         predictions = []
         for i, img in enumerate(images):
-            text = pytesseract.image_to_string(img)
-            # The model expects a list of documents, so we pass the text in a list
-            prediction = doc_model.predict([text])
-            
-            # Get prediction confidence/probability if available
             try:
-                prediction_proba = doc_model.predict_proba([text])
-                confidence = float(max(prediction_proba[0]))
-            except AttributeError:
-                # Model doesn't support predict_proba
-                confidence = None
-            
-            predictions.append({
-                "page": i + 1,
-                "predicted_label": prediction[0],
-                "confidence": confidence,
-                "text_length": len(text)
-            })
+                # Create a config string to pass directly to Tesseract
+                tess_config = f'--tessdata-dir {TESSDATA_PATH}'
+                
+                # Use the config parameter in the OCR call
+                text = pytesseract.image_to_string(img, config=tess_config)
+                
+                # The model expects a list of documents, so we pass the text in a list
+                prediction = doc_model.predict([text])
+                
+                # Get prediction confidence/probability if available
+                try:
+                    prediction_proba = doc_model.predict_proba([text])
+                    confidence = float(max(prediction_proba[0]))
+                except AttributeError:
+                    # Model doesn't support predict_proba
+                    confidence = None
+                
+                predictions.append({
+                    "page": i + 1,
+                    "predicted_label": prediction[0],
+                    "confidence": confidence,
+                    "text_length": len(text)
+                })
+            except Exception as ocr_error:
+                print(f"Error during OCR on page {i+1}: {ocr_error}")
+                # Add a placeholder for the failed page
+                predictions.append({
+                    "page": i + 1,
+                    "predicted_label": "OCR_ERROR",
+                    "confidence": None,
+                    "text_length": 0
+                })
         
         # Clean up temporary file
         os.unlink(temp_path)
