@@ -7,6 +7,7 @@ from pdf2image import convert_from_path
 import pytesseract
 import sys
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Define the Tesseract data directory path
 TESSDATA_PATH = '/usr/share/tesseract-ocr/5/tessdata'
@@ -47,6 +48,23 @@ try:
 except FileNotFoundError:
     print(f"WARNING: Document classification model file not found at '{MODEL_OUTPUT_PATH}'. The /predict endpoint will not work.")
 
+def ocr_page(img_data):
+    """
+    Helper function to perform OCR on a single image with explicit tessdata configuration.
+    Returns a tuple of (page_index, text) for maintaining page order.
+    """
+    page_index, img = img_data
+    try:
+        # Create a config string to pass directly to Tesseract
+        tess_config = f'--tessdata-dir {TESSDATA_PATH}'
+        
+        # Use the config parameter in the OCR call
+        text = pytesseract.image_to_string(img, config=tess_config)
+        return (page_index, text)
+    except Exception as e:
+        print(f"Error during OCR on page {page_index + 1}: {e}")
+        return (page_index, "")  # Return empty string on error
+
 @app.route('/')
 def health_check():
     """A simple health check endpoint."""
@@ -61,7 +79,8 @@ def health_check():
 @app.route('/predict', methods=['POST'])
 def predict_document_type():
     """
-    Accepts a PDF file upload and returns the predicted document type for each page.
+    Accepts a PDF file and returns the predicted document type for each page,
+    using parallel processing for optimization.
     """
     if doc_model is None:
         return jsonify({"error": "Document classification model not loaded. Cannot perform prediction."}), 503
@@ -82,18 +101,36 @@ def predict_document_type():
             file.save(temp_file.name)
             temp_path = temp_file.name
 
-        # Use pdf2image and pytesseract to extract text, just like in the training script
-        images = convert_from_path(temp_path)
+        # Optimize image conversion: use a lower DPI and convert to grayscale
+        print(f"Converting PDF to images with optimized settings...")
+        images = convert_from_path(temp_path, dpi=200, grayscale=True)
+        print(f"Converted {len(images)} pages, starting parallel OCR processing...")
         
+        page_texts = {}
+        # Use a thread pool to perform OCR on pages in parallel
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            # Create a future for each page's OCR task
+            # Pass tuples of (page_index, image) to maintain order
+            future_to_page = {
+                executor.submit(ocr_page, (i, img)): i 
+                for i, img in enumerate(images)
+            }
+            
+            for future in as_completed(future_to_page):
+                try:
+                    page_index, text = future.result()
+                    page_texts[page_index] = text
+                except Exception as exc:
+                    page_num = future_to_page[future]
+                    print(f'Page {page_num + 1} generated an exception: {exc}')
+                    page_texts[page_num] = ""  # Store empty text on error
+
+        # Predict on the extracted texts in page order
         predictions = []
-        for i, img in enumerate(images):
+        for i in range(len(images)):
+            text = page_texts.get(i, "")
+            
             try:
-                # Create a config string to pass directly to Tesseract
-                tess_config = f'--tessdata-dir {TESSDATA_PATH}'
-                
-                # Use the config parameter in the OCR call
-                text = pytesseract.image_to_string(img, config=tess_config)
-                
                 # The model expects a list of documents, so we pass the text in a list
                 prediction = doc_model.predict([text])
                 
@@ -111,19 +148,20 @@ def predict_document_type():
                     "confidence": confidence,
                     "text_length": len(text)
                 })
-            except Exception as ocr_error:
-                print(f"Error during OCR on page {i+1}: {ocr_error}")
-                # Add a placeholder for the failed page
+            except Exception as pred_error:
+                print(f"Error during prediction on page {i+1}: {pred_error}")
                 predictions.append({
                     "page": i + 1,
-                    "predicted_label": "OCR_ERROR",
+                    "predicted_label": "PREDICTION_ERROR",
                     "confidence": None,
-                    "text_length": 0
+                    "text_length": len(text)
                 })
         
         # Clean up temporary file
         os.unlink(temp_path)
-            
+        
+        print(f"Successfully processed {len(predictions)} pages")
+        
         return jsonify({
             "success": True,
             "filename": file.filename,
