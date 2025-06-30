@@ -7,19 +7,19 @@ from pdf2image import convert_from_path
 import numpy as np
 import sys
 from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from paddleocr import PaddleOCR
-
-# Initialize PaddleOCR on startup
-print("Initializing PaddleOCR engine...")
-ocr_engine = PaddleOCR(use_angle_cls=True, lang='en')
-print("PaddleOCR engine initialized.")
 
 # Add current directory to path to import config
 sys.path.append(str(Path(__file__).parent))
 from config import MODEL_OUTPUT_PATH
 
 app = Flask(__name__)
+
+# Initialize PaddleOCR on startup
+print("Initializing PaddleOCR engine...")
+# This will download the necessary models on the first run
+ocr_engine = PaddleOCR(use_angle_cls=True, lang='en')
+print("PaddleOCR engine initialized successfully.")
 
 # Load the trained document classification model on startup
 doc_model = None
@@ -29,26 +29,6 @@ try:
 except FileNotFoundError:
     print(f"WARNING: Document classification model file not found at '{MODEL_OUTPUT_PATH}'. The /predict endpoint will not work.")
 
-def ocr_page(img_data):
-    """
-    Helper function to perform OCR on a single image using PaddleOCR.
-    Returns a tuple of (page_index, text) for maintaining page order.
-    """
-    page_index, img = img_data
-    try:
-        # Use PaddleOCR to get structured text results
-        result = ocr_engine.ocr(np.array(img), cls=True)
-        
-        # Extract just the text from the results
-        page_text = ""
-        if result and result[0] is not None:
-            text_lines = [line[1][0] for line in result[0]]
-            page_text = " ".join(text_lines)
-        
-        return (page_index, page_text)
-    except Exception as e:
-        print(f"Error during OCR on page {page_index + 1}: {e}")
-        return (page_index, "")  # Return empty string on error
 
 @app.route('/')
 def health_check():
@@ -81,71 +61,27 @@ def predict_document_type():
         return jsonify({"error": "Only PDF files are supported"}), 400
 
     try:
-        # Save uploaded file to temporary location
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as temp_file:
-            file.save(temp_file.name)
-            temp_path = temp_file.name
+        # Convert PDF pages to images
+        images = convert_from_path(file)
 
-        # Optimize image conversion: use a lower DPI for faster processing
-        print(f"Converting PDF to images with optimized settings...")
-        images = convert_from_path(temp_path, dpi=200)
-        print(f"Converted {len(images)} pages, starting parallel OCR processing...")
-        
-        page_texts = {}
-        # Use a thread pool to perform OCR on pages in parallel
-        with ThreadPoolExecutor(max_workers=4) as executor:
-            # Create a future for each page's OCR task
-            # Pass tuples of (page_index, image) to maintain order
-            future_to_page = {
-                executor.submit(ocr_page, (i, img)): i 
-                for i, img in enumerate(images)
-            }
-            
-            for future in as_completed(future_to_page):
-                try:
-                    page_index, text = future.result()
-                    page_texts[page_index] = text
-                except Exception as exc:
-                    page_num = future_to_page[future]
-                    print(f'Page {page_num + 1} generated an exception: {exc}')
-                    page_texts[page_num] = ""  # Store empty text on error
-
-        # Predict on the extracted texts in page order
         predictions = []
-        for i in range(len(images)):
-            text = page_texts.get(i, "")
-            
-            try:
-                # The model expects a list of documents, so we pass the text in a list
-                prediction = doc_model.predict([text])
-                
-                # Get prediction confidence/probability if available
-                try:
-                    prediction_proba = doc_model.predict_proba([text])
-                    confidence = float(max(prediction_proba[0]))
-                except AttributeError:
-                    # Model doesn't support predict_proba
-                    confidence = None
-                
-                predictions.append({
-                    "page": i + 1,
-                    "predicted_label": prediction[0],
-                    "confidence": confidence,
-                    "text_length": len(text)
-                })
-            except Exception as pred_error:
-                print(f"Error during prediction on page {i+1}: {pred_error}")
-                predictions.append({
-                    "page": i + 1,
-                    "predicted_label": "PREDICTION_ERROR",
-                    "confidence": None,
-                    "text_length": len(text)
-                })
-        
-        # Clean up temporary file
-        os.unlink(temp_path)
-        
-        print(f"Successfully processed {len(predictions)} pages")
+        for i, img in enumerate(images):
+            # Use PaddleOCR to get structured text results
+            # The OCR result is a list of lists, e.g., [[...], [[...]]]
+            ocr_result = ocr_engine.ocr(np.array(img), cls=True)
+
+            # Extract just the text from the results and join it into a single string
+            page_text = ""
+            if ocr_result and ocr_result[0] is not None:
+                text_lines = [line[1][0] for line in ocr_result[0]]
+                page_text = " ".join(text_lines)
+
+            # Use the existing scikit-learn model for classification
+            prediction = doc_model.predict([page_text])
+            predictions.append({
+                "page": i + 1,
+                "predicted_label": prediction[0]
+            })
         
         return jsonify({
             "success": True,
