@@ -1,0 +1,42 @@
+# Git files
+.git
+.gitignore
+
+# Python cache
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Test files
+tests/
+test_*.py
+
+# Documentation
+*.md
+docs/
+
+# NPLVision directory (if it's not needed for the API)
+nplvision/
+
+# Jupyter notebooks
+*.ipynb
+.ipynb_checkpoints/
