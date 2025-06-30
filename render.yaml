@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: nplvision-propertydata-api
+    name: collateral-analysis-service
     env: docker
     plan: free
     dockerfilePath: ./Dockerfile
