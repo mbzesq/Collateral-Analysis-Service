@@ -12,6 +12,23 @@ from pathlib import Path
 if os.path.exists('/usr/bin/tesseract'):
     pytesseract.pytesseract.tesseract_cmd = '/usr/bin/tesseract'
 
+# Log Tesseract configuration for debugging
+print(f"Tesseract command: {pytesseract.pytesseract.tesseract_cmd}")
+print(f"TESSDATA_PREFIX: {os.environ.get('TESSDATA_PREFIX', 'Not set')}")
+
+# Verify Tesseract works at startup
+try:
+    import subprocess
+    result = subprocess.run([pytesseract.pytesseract.tesseract_cmd, '--list-langs'], 
+                          capture_output=True, text=True)
+    if result.returncode == 0:
+        langs = result.stdout.strip().split('\n')[1:]  # Skip header line
+        print(f"Tesseract initialized successfully. Available languages: {', '.join(langs)}")
+    else:
+        print(f"WARNING: Tesseract language check failed: {result.stderr}")
+except Exception as e:
+    print(f"WARNING: Could not verify Tesseract installation: {e}")
+
 # Add current directory to path to import config
 sys.path.append(str(Path(__file__).parent))
 from config import MODEL_OUTPUT_PATH
