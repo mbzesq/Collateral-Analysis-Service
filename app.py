@@ -4,35 +4,16 @@ from flask import Flask, request, jsonify
 import pandas as pd
 import joblib
 from pdf2image import convert_from_path
-import pytesseract
+import numpy as np
 import sys
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from paddleocr import PaddleOCR
 
-# Define the Tesseract data directory path
-TESSDATA_PATH = '/usr/share/tesseract-ocr/5/tessdata'
-
-# Set Tesseract command path for Docker environment
-if os.path.exists('/usr/bin/tesseract'):
-    pytesseract.pytesseract.tesseract_cmd = '/usr/bin/tesseract'
-
-# Log Tesseract configuration for debugging
-print(f"Tesseract command: {pytesseract.pytesseract.tesseract_cmd}")
-print(f"TESSDATA_PREFIX: {os.environ.get('TESSDATA_PREFIX', 'Not set')}")
-print(f"Explicit TESSDATA_PATH: {TESSDATA_PATH}")
-
-# Verify Tesseract works at startup
-try:
-    import subprocess
-    result = subprocess.run([pytesseract.pytesseract.tesseract_cmd, '--list-langs'], 
-                          capture_output=True, text=True)
-    if result.returncode == 0:
-        langs = result.stdout.strip().split('\n')[1:]  # Skip header line
-        print(f"Tesseract initialized successfully. Available languages: {', '.join(langs)}")
-    else:
-        print(f"WARNING: Tesseract language check failed: {result.stderr}")
-except Exception as e:
-    print(f"WARNING: Could not verify Tesseract installation: {e}")
+# Initialize PaddleOCR on startup
+print("Initializing PaddleOCR engine...")
+ocr_engine = PaddleOCR(use_angle_cls=True, lang='en')
+print("PaddleOCR engine initialized.")
 
 # Add current directory to path to import config
 sys.path.append(str(Path(__file__).parent))
@@ -50,17 +31,21 @@ except FileNotFoundError:
 
 def ocr_page(img_data):
     """
-    Helper function to perform OCR on a single image with explicit tessdata configuration.
+    Helper function to perform OCR on a single image using PaddleOCR.
     Returns a tuple of (page_index, text) for maintaining page order.
     """
     page_index, img = img_data
     try:
-        # Create a config string to pass directly to Tesseract
-        tess_config = f'--tessdata-dir {TESSDATA_PATH}'
+        # Use PaddleOCR to get structured text results
+        result = ocr_engine.ocr(np.array(img), cls=True)
         
-        # Use the config parameter in the OCR call
-        text = pytesseract.image_to_string(img, config=tess_config)
-        return (page_index, text)
+        # Extract just the text from the results
+        page_text = ""
+        if result and result[0] is not None:
+            text_lines = [line[1][0] for line in result[0]]
+            page_text = " ".join(text_lines)
+        
+        return (page_index, page_text)
     except Exception as e:
         print(f"Error during OCR on page {page_index + 1}: {e}")
         return (page_index, "")  # Return empty string on error
@@ -101,9 +86,9 @@ def predict_document_type():
             file.save(temp_file.name)
             temp_path = temp_file.name
 
-        # Optimize image conversion: use a lower DPI and convert to grayscale
+        # Optimize image conversion: use a lower DPI for faster processing
         print(f"Converting PDF to images with optimized settings...")
-        images = convert_from_path(temp_path, dpi=200, grayscale=True)
+        images = convert_from_path(temp_path, dpi=200)
         print(f"Converted {len(images)} pages, starting parallel OCR processing...")
         
         page_texts = {}

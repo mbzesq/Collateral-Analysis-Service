@@ -1,0 +1,56 @@
+# Use Python 3.11 slim image as base
+FROM python:3.11-slim
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    poppler-utils \
+    tesseract-ocr \
+    tesseract-ocr-eng \
+    libgl1-mesa-glx \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender-dev \
+    libgomp1 \
+    wget \
+    curl \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create tessdata directory and manually download language files as a fallback
+# This ensures we always have the language data regardless of package issues
+RUN mkdir -p /usr/local/share/tessdata && \
+    cd /usr/local/share/tessdata && \
+    # Download English language data directly from GitHub
+    curl -LO https://github.com/tesseract-ocr/tessdata/raw/main/eng.traineddata && \
+    # Also download the OSD (Orientation and Script Detection) data
+    curl -LO https://github.com/tesseract-ocr/tessdata/raw/main/osd.traineddata && \
+    # Verify the files were downloaded
+    ls -la /usr/local/share/tessdata/
+
+# Set the TESSDATA_PREFIX to our manually created directory
+ENV TESSDATA_PREFIX=/usr/local/share/tessdata
+
+# Set working directory
+WORKDIR /app
+
+# Copy requirements first for better caching
+COPY requirements.txt .
+
+# Install Python dependencies
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy the rest of the application
+COPY . .
+
+# Set environment variables
+ENV PYTHONUNBUFFERED=1
+
+# Verify Tesseract can find the language files
+RUN tesseract --list-langs && echo "Tesseract language verification successful"
+
+# Expose port
+EXPOSE 5000
+
+# Run the application
+CMD ["gunicorn", "--bind", "0.0.0.0:5000", "app:app"]
