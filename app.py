@@ -8,6 +8,10 @@ import pytesseract
 import sys
 from pathlib import Path
 
+# Set Tesseract command path for Docker environment
+if os.path.exists('/usr/bin/tesseract'):
+    pytesseract.pytesseract.tesseract_cmd = '/usr/bin/tesseract'
+
 # Add current directory to path to import config
 sys.path.append(str(Path(__file__).parent))
 from config import MODEL_OUTPUT_PATH
